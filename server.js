@@ -7,7 +7,7 @@ const cors = require("cors");
 const morgan = require("morgan");
 const speakeasy = require("speakeasy");
 const nodemailer = require("nodemailer");
-const tf = require("@tensorflow/tfjs-node");
+const tf = require("@tensorflow/tfjs");
 const app = express();
 app.use(express.json());
 app.use(cors());
