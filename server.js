@@ -7,11 +7,13 @@ const cors = require("cors");
 const morgan = require("morgan");
 const speakeasy = require("speakeasy");
 const nodemailer = require("nodemailer");
+
 const app = express();
 app.use(express.json());
 app.use(cors());
 app.use(morgan("dev"));
 
+// MongoDB Connection
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -24,11 +26,11 @@ const UserSchema = new mongoose.Schema({
   username: String,
   email: { type: String, unique: true },
   password: String,
-  preferences: [String], 
+  preferences: [String],
   likedProducts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Product" }],
   dislikedProducts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Product" }],
   twoFactorSecret: String,
-  is2FAEnabled: { type: Boolean, default: false }
+  is2FAEnabled: { type: Boolean, default: false },
 });
 const User = mongoose.model("User", UserSchema);
 
@@ -39,7 +41,7 @@ const ProductSchema = new mongoose.Schema({
   sustainability_score: Number,
   price: { type: Number, required: true },
   currency: { type: String, default: "INR" },
-  imageUrl: String
+  imageUrl: String,
 });
 const Product = mongoose.model("Product", ProductSchema);
 
@@ -47,8 +49,8 @@ const Product = mongoose.model("Product", ProductSchema);
 const CartSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
-  quantity: { type: Number, default: 1 }, 
-  addedAt: { type: Date, default: Date.now }
+  quantity: { type: Number, default: 1 },
+  addedAt: { type: Date, default: Date.now },
 });
 const Cart = mongoose.model("Cart", CartSchema);
 
@@ -58,7 +60,7 @@ const FeedbackSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
   rating: { type: Number, min: 1, max: 5, required: true },
   comment: String,
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
 });
 const Feedback = mongoose.model("Feedback", FeedbackSchema);
 
@@ -70,7 +72,7 @@ app.post("/api/auth/register", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     await User.create({ username, email, password: hashedPassword });
-    
+
     res.status(201).json({ message: "User registered successfully!" });
   } catch (error) {
     console.error("Error registering user:", error);
@@ -111,7 +113,7 @@ app.post("/api/auth/login", async (req, res) => {
       const verified = speakeasy.totp.verify({
         secret: user.twoFactorSecret,
         encoding: "base32",
-        token
+        token,
       });
       if (!verified) return res.status(403).json({ message: "Invalid 2FA token" });
     }
@@ -162,7 +164,7 @@ app.post("/api/user/like", async (req, res) => {
 
     await User.findByIdAndUpdate(userId, {
       $addToSet: { likedProducts: productId, preferences: product.category },
-      $pull: { dislikedProducts: productId }
+      $pull: { dislikedProducts: productId },
     });
 
     res.json({ message: "Product liked! Preferences updated." });
@@ -180,7 +182,7 @@ app.post("/api/user/dislike", async (req, res) => {
 
     await User.findByIdAndUpdate(userId, {
       $addToSet: { dislikedProducts: productId },
-      $pull: { likedProducts: productId }
+      $pull: { likedProducts: productId },
     });
 
     res.json({ message: "Product disliked & removed from recommendations." });
@@ -192,23 +194,23 @@ app.post("/api/user/dislike", async (req, res) => {
 
 // Machine Learning Algorithm for Recommendations
 const getRecommendedProducts = async (userId) => {
-  const user = await User.findById(userId).populate('likedProducts');
+  const user = await User.findById(userId).populate("likedProducts");
   const allProducts = await Product.find();
 
   // Create a map of product IDs and their corresponding categories
   const productCategoryMap = {};
-  allProducts.forEach(product => {
+  allProducts.forEach((product) => {
     productCategoryMap[product._id] = product.category;
   });
 
   // Calculate similarity scores for each product based on user's liked products
   const productScores = {};
-  user.likedProducts.forEach(likedProduct => {
-    allProducts.forEach(product => {
+  user.likedProducts.forEach((likedProduct) => {
+    allProducts.forEach((product) => {
       if (!productScores[product._id]) {
         productScores[product._id] = 0;
       }
-      if (productCategoryMap[product._id] === product.category) {
+      if (productCategoryMap[product._id] === likedProduct.category) {
         productScores[product._id] += 1;
       }
     });
@@ -217,7 +219,7 @@ const getRecommendedProducts = async (userId) => {
   // Sort products based on similarity scores and return top recommendations
   const recommendedProductIds = Object.keys(productScores)
     .sort((a, b) => productScores[b] - productScores[a])
-    .filter(id => !user.likedProducts.includes(id) && !user.dislikedProducts.includes(id))
+    .filter((id) => !user.likedProducts.includes(id) && !user.dislikedProducts.includes(id))
     .slice(0, 10);
 
   const recommendedProducts = await Product.find({ _id: { $in: recommendedProductIds } });
@@ -227,4 +229,117 @@ const getRecommendedProducts = async (userId) => {
 // Get Recommendations
 app.get("/api/products/recommend/:userId", async (req, res) => {
   try {
-    const recommendedProducts = await getRecommended
+    const recommendedProducts = await getRecommendedProducts(req.params.userId);
+    res.json(recommendedProducts);
+  } catch (error) {
+    console.error("Error fetching recommendations:", error);
+    res.status(500).json({ message: "Error fetching recommendations", error });
+  }
+});
+
+// Add to Cart
+app.post("/api/cart/add", async (req, res) => {
+  try {
+    const { userId, productId, quantity } = req.body;
+    if (!userId || !productId) return res.status(400).json({ message: "User ID and Product ID required" });
+
+    const cartItem = await Cart.findOne({ userId, productId });
+    if (cartItem) {
+      cartItem.quantity += quantity || 1;
+      await cartItem.save();
+    } else {
+      await Cart.create({ userId, productId, quantity });
+    }
+
+    res.json({ message: "Product added to cart!" });
+  } catch (error) {
+    console.error("Error adding to cart:", error);
+    res.status(500).json({ message: "Error adding to cart", error });
+  }
+});
+
+// Get Cart Items
+app.get("/api/cart/:userId", async (req, res) => {
+  try {
+    const cartItems = await Cart.find({ userId: req.params.userId }).populate("productId");
+    res.json(cartItems);
+  } catch (error) {
+    console.error("Error fetching cart items:", error);
+    res.status(500).json({ message: "Error fetching cart items", error });
+  }
+});
+
+// Remove from Cart
+app.delete("/api/cart/remove", async (req, res) => {
+  try {
+    const { userId, productId } = req.body;
+    if (!userId || !productId) return res.status(400).json({ message: "User ID and Product ID required" });
+
+    await Cart.findOneAndDelete({ userId, productId });
+    res.json({ message: "Product removed from cart!" });
+  } catch (error) {
+    console.error("Error removing from cart:", error);
+    res.status(500).json({ message: "Error removing from cart", error });
+  }
+});
+
+// Submit Feedback
+app.post("/api/feedback/submit", async (req, res) => {
+  try {
+    const { userId, productId, rating, comment } = req.body;
+    if (!userId || !productId || !rating) return res.status(400).json({ message: "User ID, Product ID, and Rating required" });
+
+    await Feedback.create({ userId, productId, rating, comment });
+    res.json({ message: "Feedback submitted successfully!" });
+  } catch (error) {
+    console.error("Error submitting feedback:", error);
+    res.status(500).json({ message: "Error submitting feedback", error });
+  }
+});
+
+// Get Feedback for a Product
+app.get("/api/feedback/:productId", async (req, res) => {
+  try {
+    const feedback = await Feedback.find({ productId: req.params.productId }).populate("userId");
+    res.json(feedback);
+  } catch (error) {
+    console.error("Error fetching feedback:", error);
+    res.status(500).json({ message: "Error fetching feedback", error });
+  }
+});
+
+// Nodemailer Configuration for Email Notifications
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD,
+  },
+});
+
+// Send Email Notification
+app.post("/api/notify", async (req, res) => {
+  try {
+    const { email, subject, text } = req.body;
+    if (!email || !subject || !text) return res.status(400).json({ message: "Email, Subject, and Text required" });
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject,
+      text,
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ message: "Email sent successfully!" });
+  } catch (error) {
+    console.error("Error sending email:", error);
+    res.status(500).json({ message: "Error sending email", error });
+  }
+});
+
+// Start the server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
